@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CKD Picking</title>
+
+<script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
+<script src="https://unpkg.com/html5-qrcode"></script>
+
+<style>
+body{font-family:system-ui;margin:0;background:#eef1f5}
+.wrap{max-width:520px;margin:auto;padding:18px}
+.card{background:white;padding:20px;border-radius:14px;box-shadow:0 6px 14px rgba(0,0,0,.08)}
+button.big{width:100%;padding:22px;font-size:22px;margin-bottom:16px;border:none;border-radius:12px;background:#111;color:white}
+button.action{width:100%;padding:18px;font-size:20px;margin-top:16px;border:none;border-radius:12px;background:#1565C0;color:white}
+button.back{background:#666}
+input{width:100%;padding:16px;font-size:18px;margin-top:12px;border-radius:10px;border:1px solid #ccc;box-sizing:border-box}
+.msg{margin-top:14px;font-weight:bold}
+.resultCard{background:#f8fafc;padding:12px;border-radius:10px;margin-top:10px;border-left:5px solid #1565C0}
+</style>
+</head>
+
+<body>
+
+<div class="wrap">
+
+<div id="home" class="card">
+<button class="big" onclick="showPick()">Picking Entry</button>
+<button class="big" onclick="showSearch()">Search Part</button>
+</div>
+
+<div id="pickCard" class="card" style="display:none">
+
+<h3>Scan Picking</h3>
+
+<input id="picker" placeholder="Your Name">
+
+<div id="reader" style="margin-top:12px"></div>
+
+<button class="action back" onclick="goHome()">BACK</button>
+
+<div id="msg" class="msg"></div>
+
+</div>
+
+<div id="searchCard" class="card" style="display:none">
+
+<h3>Search Part</h3>
+
+<input id="searchPart" placeholder="Enter Part ID">
+<button class="action" onclick="search()">SEARCH</button>
+<button class="action back" onclick="goHome()">BACK</button>
+
+<div id="searchResult"></div>
+
+</div>
+
+</div>
+
+<script>
+
+const firebaseConfig = {
+  apiKey: 
+  authDomain:
+  projectId: 
+  storageBucket: 
+  messagingSenderId: 
+  appId: 
+};
+
+firebase.initializeApp(firebaseConfig);
+const db = firebase.firestore();
+
+let scanner;
+let scanLock = false;   
+
+function showPick(){
+  home.style.display = "none";
+  pickCard.style.display = "block";
+  searchCard.style.display = "none";
+  startScanner();
+}
+
+function showSearch(){
+  stopScanner();
+  home.style.display="none";
+  searchCard.style.display="block";
+  pickCard.style.display="none";
+}
+
+function goHome(){
+  stopScanner();
+  home.style.display="block";
+  pickCard.style.display="none";
+  searchCard.style.display="none";
+}
+
+function startScanner(){
+
+  if(scanner) return;   // do NOT recreate
+
+  scanner = new Html5Qrcode("reader");
+
+  scanner.start(
+    { facingMode: "environment" },
+    {
+      fps: 10,
+      qrbox: 250
+    },
+    onScanSuccess
+  ).catch(err=>{
+    alert("Camera start failed: " + err);
+  });
+}
+
+function stopScanner(){
+  if(scanner){
+    scanner.stop().then(()=>{
+      scanner = null;
+    }).catch(()=>{});
+  }
+}
+
+async function onScanSuccess(text){
+
+  if(scanLock) return;
+  scanLock = true;
+
+  const picker = document.getElementById("picker").value;
+
+  if(!picker){
+    msg.style.color = "red";
+    msg.innerText = "Enter Name First";
+    scanLock = false;
+    return;
+  }
+
+  let data;
+
+  try{
+    data = JSON.parse(text);
+  }catch{
+    const parts = text.split("-");
+    data = {
+      part: parts[2] || text,   
+      sku: parts[3] || "",
+      date: parts[4] || "",
+      lot: parts[0] || "",
+      case: parts[1] || ""
+    };
+  }
+
+  try{
+  await db.collection("picks").add({
+    part: data.part,
+    wo: data.wo || "",
+    sku: data.sku,
+    picker: picker,
+    time: new Date()
+  });
+  }catch(e){
+    msg.style.color="red";
+    msg.innerText="Save error: " + e.message;
+    scanLock=false;
+    return;
+  }
+
+  msg.style.color = "green";
+  msg.innerText = "Saved";
+
+  setTimeout(()=>{
+    msg.innerText = "";
+    scanLock = false;
+  },1200);
+}
+
+async function search(){
+
+  const p = searchPart.value.trim();
+
+  if(!p){
+    searchResult.innerHTML = "Enter Part";
+    return;
+  }
+
+  searchResult.innerHTML = "Searching...";
+
+  try{
+
+    const snap = await db.collection("picks")
+      .where("part","==",p)
+      .get();
+
+    if(snap.empty){
+      searchResult.innerHTML = "<b>No entry exists</b>";
+      return;
+    }
+
+    let html = "";
+
+    snap.forEach(doc=>{
+      const d = doc.data();
+      html += `
+        <div class="resultCard">
+          Picker: ${d.picker}<br>
+          WO: ${d.wo || "-"}<br>
+          Time: ${d.time.toDate()}
+        </div>`;
+    });
+
+    searchResult.innerHTML = html;
+
+  }catch(e){
+    searchResult.innerHTML = "Error: " + e.message;
+  }
+}
+
+</script>
+</body>
+</html>
