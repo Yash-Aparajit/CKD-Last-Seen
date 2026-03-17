@@ -2,11 +2,12 @@
 <html>
 <head>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>CKD Picking</title>
+<title>CKD Last Seen</title>
 
 <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
 <script src="https://unpkg.com/html5-qrcode"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 
 <style>
 body{font-family:system-ui;margin:0;background:#eef1f5}
@@ -15,9 +16,9 @@ body{font-family:system-ui;margin:0;background:#eef1f5}
 button.big{width:100%;padding:22px;font-size:22px;margin-bottom:16px;border:none;border-radius:12px;background:#111;color:white}
 button.action{width:100%;padding:18px;font-size:20px;margin-top:16px;border:none;border-radius:12px;background:#1565C0;color:white}
 button.back{background:#666}
-input{width:100%;padding:16px;font-size:18px;margin-top:12px;border-radius:10px;border:1px solid #ccc;box-sizing:border-box}
-.msg{margin-top:14px;font-weight:bold}
-.resultCard{background:#f8fafc;padding:12px;border-radius:10px;margin-top:10px;border-left:5px solid #1565C0}
+input,select{width:100%;padding:16px;font-size:18px;margin-top:12px;border-radius:10px;border:1px solid #ccc;box-sizing:border-box}
+.msg{margin-top:14px;font-weight:bold;font-size:20px}
+.resultCard{background:#f8fafc;padding:16px;border-radius:10px;margin-top:12px;border-left:6px solid #1565C0;font-size:18px}
 </style>
 </head>
 
@@ -26,34 +27,48 @@ input{width:100%;padding:16px;font-size:18px;margin-top:12px;border-radius:10px;
 <div class="wrap">
 
 <div id="home" class="card">
-<button class="big" onclick="showPick()">Picking Entry</button>
-<button class="big" onclick="showSearch()">Search Part</button>
+<button class="big" onclick="showPick()">SCAN MATERIAL</button>
+<button class="big" onclick="openExport()">EXPORT REPORT</button>
+<button class="big" onclick="showSearch()">SEARCH PART</button>
 </div>
 
 <div id="pickCard" class="card" style="display:none">
-
-<h3>Scan Picking</h3>
-
-<input id="picker" placeholder="Your Name">
-
-<div id="reader" style="margin-top:12px"></div>
-
+<h3>Scan Leaving Store</h3>
+<input id="picker" placeholder="Enter Your Name">
+<select id="location">
+<option value="STORE">STORE</option>
+<option value="TABLE">TABLE</option>
+<option value="REPUT">REPUT AWAY</option>
+</select>
+<div id="reader" style="margin-top:14px"></div>
 <button class="action back" onclick="goHome()">BACK</button>
-
 <div id="msg" class="msg"></div>
-
 </div>
 
 <div id="searchCard" class="card" style="display:none">
-
-<h3>Search Part</h3>
-
+<h3>Search Last Seen</h3>
 <input id="searchPart" placeholder="Enter Part ID">
 <button class="action" onclick="search()">SEARCH</button>
 <button class="action back" onclick="goHome()">BACK</button>
-
 <div id="searchResult"></div>
+</div>
 
+<div id="exportCard" class="card" style="display:none">
+<h3>Export Report</h3>
+<select id="exportType">
+<option value="today">Today</option>
+<option value="week">This Week</option>
+<option value="month">This Month</option>
+<option value="custom">Custom Range</option>
+</select>
+
+<div id="customRange" style="display:none">
+<input type="date" id="fromDate">
+<input type="date" id="toDate">
+</div>
+
+<button class="action" onclick="exportExcel()">DOWNLOAD</button>
+<button class="action back" onclick="goHome()">BACK</button>
 </div>
 
 </div>
@@ -61,32 +76,46 @@ input{width:100%;padding:16px;font-size:18px;margin-top:12px;border-radius:10px;
 <script>
 
 const firebaseConfig = {
-  apiKey: 
-  authDomain:
-  projectId: 
-  storageBucket: 
-  messagingSenderId: 
-  appId: 
+  apiKey: "YOUR_KEY",
+  authDomain: "YOUR_DOMAIN",
+  projectId: "YOUR_PROJECT",
+  storageBucket: "YOUR_BUCKET",
+  messagingSenderId: "YOUR_ID",
+  appId: "YOUR_APP"
 };
 
 firebase.initializeApp(firebaseConfig);
 const db = firebase.firestore();
 
-let scanner;
-let scanLock = false;   
+let scanner=null;
+let scanning=false;
+
+exportType.onchange=function(){
+  customRange.style.display = this.value==="custom" ? "block":"none";
+};
 
 function showPick(){
-  home.style.display = "none";
-  pickCard.style.display = "block";
-  searchCard.style.display = "none";
+  home.style.display="none";
+  searchCard.style.display="none";
+  exportCard.style.display="none";
+  pickCard.style.display="block";
   startScanner();
 }
 
 function showSearch(){
   stopScanner();
   home.style.display="none";
-  searchCard.style.display="block";
   pickCard.style.display="none";
+  exportCard.style.display="none";
+  searchCard.style.display="block";
+}
+
+function openExport(){
+  stopScanner();
+  home.style.display="none";
+  pickCard.style.display="none";
+  searchCard.style.display="none";
+  exportCard.style.display="block";
 }
 
 function goHome(){
@@ -94,125 +123,189 @@ function goHome(){
   home.style.display="block";
   pickCard.style.display="none";
   searchCard.style.display="none";
+  exportCard.style.display="none";
 }
 
-function startScanner(){
+async function startScanner(){
+  if(scanning) return;
+  scanning=true;
+  msgShow("Starting Camera...","black");
+  scanner=new Html5Qrcode("reader");
+  try{
+    await scanner.start({facingMode:"environment"},{fps:10,qrbox:250},handleScan);
+    msgClear();
+  }catch(e){
+    msgShow("Camera Failed","red");
+    scanning=false;
+  }
+}
 
-  if(scanner) return;   // do NOT recreate
+async function handleScan(text){
+  if(!scanning) return;
+  scanning=false;
+  try{await scanner.stop();}catch{}
+  scanner=null;
 
-  scanner = new Html5Qrcode("reader");
+  const picker=pickerField();
+  const location=document.getElementById("location").value;
 
-  scanner.start(
-    { facingMode: "environment" },
-    {
-      fps: 10,
-      qrbox: 250
-    },
-    onScanSuccess
-  ).catch(err=>{
-    alert("Camera start failed: " + err);
-  });
+  if(!picker){
+    msgShow("Enter Name First","red");
+    return;
+  }
+
+  const part=parsePart(text);
+  msgShow("Saving...","black");
+
+  try{
+    await db.collection("picks").add({
+      part:part,
+      picker:picker,
+      location:location,
+      time:new Date()
+    });
+    msgShow("✔ Saved: "+part,"green");
+  }catch(e){
+    msgShow("Save Failed","red");
+    return;
+  }
+
+  setTimeout(()=>{msgClear();startScanner();},2000);
 }
 
 function stopScanner(){
   if(scanner){
-    scanner.stop().then(()=>{
-      scanner = null;
-    }).catch(()=>{});
+    scanner.stop().catch(()=>{});
+    scanner=null;
+    scanning=false;
   }
 }
 
-async function onScanSuccess(text){
+function pickerField(){
+  return document.getElementById("picker").value.trim();
+}
 
-  if(scanLock) return;
-  scanLock = true;
-
-  const picker = document.getElementById("picker").value;
-
-  if(!picker){
-    msg.style.color = "red";
-    msg.innerText = "Enter Name First";
-    scanLock = false;
-    return;
+function parsePart(text){
+  const clean=text.replace("/", "-");
+  const parts=clean.split("-");
+  for(let p of parts){
+    if(/^[A-Z]{2,3}\d{4,6}$/.test(p)) return p;
   }
+  return text;
+}
 
-  let data;
+function msgShow(t,c){
+  msg.innerText=t;
+  msg.style.color=c;
+}
 
-  try{
-    data = JSON.parse(text);
-  }catch{
-    const parts = text.split("-");
-    data = {
-      part: parts[2] || text,   
-      sku: parts[3] || "",
-      date: parts[4] || "",
-      lot: parts[0] || "",
-      case: parts[1] || ""
-    };
-  }
-
-  try{
-  await db.collection("picks").add({
-    part: data.part,
-    wo: data.wo || "",
-    sku: data.sku,
-    picker: picker,
-    time: new Date()
-  });
-  }catch(e){
-    msg.style.color="red";
-    msg.innerText="Save error: " + e.message;
-    scanLock=false;
-    return;
-  }
-
-  msg.style.color = "green";
-  msg.innerText = "Saved";
-
-  setTimeout(()=>{
-    msg.innerText = "";
-    scanLock = false;
-  },1200);
+function msgClear(){
+  msg.innerText="";
 }
 
 async function search(){
-
-  const p = searchPart.value.trim();
-
+  const p=searchPart.value.trim();
   if(!p){
-    searchResult.innerHTML = "Enter Part";
+    searchResult.innerHTML="Enter Part";
     return;
   }
-
-  searchResult.innerHTML = "Searching...";
-
+  searchResult.innerHTML="Searching...";
   try{
-
-    const snap = await db.collection("picks")
+    const snap=await db.collection("picks")
       .where("part","==",p)
+      .orderBy("time","desc")
+      .limit(5)
       .get();
 
     if(snap.empty){
-      searchResult.innerHTML = "<b>No entry exists</b>";
+      searchResult.innerHTML="<div class='resultCard'>No record → Possible real shortage</div>";
       return;
     }
 
-    let html = "";
+    const latest=snap.docs[0].data();
+    const diffMin=Math.floor((Date.now()-latest.time.toDate().getTime())/60000);
 
+    let html=`<div class="resultCard"><b>LAST SEEN: ${latest.location}</b><br>
+    By: ${latest.picker}<br>${diffMin} minutes ago</div><div class="resultCard"><b>History</b><br>`;
+
+    let i=1;
     snap.forEach(doc=>{
-      const d = doc.data();
-      html += `
-        <div class="resultCard">
-          Picker: ${d.picker}<br>
-          WO: ${d.wo || "-"}<br>
-          Time: ${d.time.toDate()}
-        </div>`;
+      const d=doc.data();
+      html+=`${i}. ${d.location} — ${d.picker}<br>${d.time.toDate().toLocaleString()}<br><br>`;
+      i++;
     });
 
-    searchResult.innerHTML = html;
+    html+="</div>";
+    searchResult.innerHTML=html;
 
   }catch(e){
-    searchResult.innerHTML = "Error: " + e.message;
+    searchResult.innerHTML="Search Error";
+  }
+}
+
+async function exportExcel(){
+  msgShow("Preparing Excel...","black");
+
+  let start,end;
+  const type=exportType.value;
+  const now=new Date();
+
+  if(type==="today"){
+    start=new Date(); start.setHours(0,0,0,0); end=new Date();
+  }
+  else if(type==="week"){
+    const day=now.getDay();
+    const diff=now.getDate()-day+(day===0?-6:1);
+    start=new Date(now.setDate(diff)); start.setHours(0,0,0,0);
+    end=new Date();
+  }
+  else if(type==="month"){
+    start=new Date(now.getFullYear(),now.getMonth(),1);
+    end=new Date();
+  }
+  else{
+    if(!fromDate.value||!toDate.value){
+      msgShow("Select date range","red");
+      return;
+    }
+    start=new Date(fromDate.value); start.setHours(0,0,0,0);
+    end=new Date(toDate.value); end.setHours(23,59,59);
+  }
+
+  try{
+    const snap=await db.collection("picks")
+      .where("time",">=",start)
+      .where("time","<=",end)
+      .orderBy("time","desc")
+      .get();
+
+    if(snap.empty){
+      msgShow("No Data","red");
+      return;
+    }
+
+    let data=[];
+    snap.forEach(doc=>{
+      const d=doc.data();
+      const t=d.time.toDate();
+      data.push({
+        Date:t.toLocaleDateString(),
+        Time:t.toLocaleTimeString(),
+        PartID:d.part,
+        Picker:d.picker,
+        Location:d.location
+      });
+    });
+
+    const ws=XLSX.utils.json_to_sheet(data);
+    const wb=XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb,ws,"CKD Report");
+    XLSX.writeFile(wb,"CKD_Report.xlsx");
+
+    msgShow("✔ Excel Downloaded","green");
+
+  }catch(e){
+    msgShow("Export Failed","red");
   }
 }
 
